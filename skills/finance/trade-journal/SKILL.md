@@ -36,6 +36,11 @@ The database is created on first use at `$HERMES_HOME/trade_journal.db`
 (default `~/.hermes/trade_journal.db`). Set `TRADE_JOURNAL_DB` to point
 somewhere else.
 
+On Windows, Hermes keeps its data under `%LOCALAPPDATA%\hermes`, so the skill
+path is `%LOCALAPPDATA%\hermes\skills\finance\trade-journal\scripts\` rather than
+`~/.hermes/skills/finance/trade-journal/scripts/`. The examples below use the POSIX
+form; substitute accordingly.
+
 ## How to Run
 
 Invoke through the `terminal` tool:

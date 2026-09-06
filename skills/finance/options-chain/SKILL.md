@@ -39,6 +39,11 @@ Optional: set `RISK_FREE_RATE` (decimal, e.g. `0.042`) to match the current
 short-term Treasury yield. Defaults to `0.04`. The rate mostly affects rho and
 long-dated theta; leaving the default is fine for short-dated analysis.
 
+On Windows, Hermes keeps its data under `%LOCALAPPDATA%\hermes`, so the skill
+path is `%LOCALAPPDATA%\hermes\skills\finance\options-chain\scripts\` rather than
+`~/.hermes/skills/finance/options-chain/scripts/`. The examples below use the POSIX
+form; substitute accordingly.
+
 ## How to Run
 
 Invoke through the `terminal` tool:

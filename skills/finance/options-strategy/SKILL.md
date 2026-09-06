@@ -34,6 +34,11 @@ not model closing the position early.
 
 Python 3.10+ standard library only. No API key, no network, no installs.
 
+On Windows, Hermes keeps its data under `%LOCALAPPDATA%\hermes`, so the skill
+path is `%LOCALAPPDATA%\hermes\skills\finance\options-strategy\scripts\` rather than
+`~/.hermes/skills/finance/options-strategy/scripts/`. The examples below use the POSIX
+form; substitute accordingly.
+
 ## How to Run
 
 Invoke through the `terminal` tool:

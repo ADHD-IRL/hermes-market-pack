@@ -1,5 +1,7 @@
 """Tests for the trade-journal skill. Uses a temp database, no network."""
 
+import pathlib
+
 import pytest
 
 import journal
@@ -195,3 +197,31 @@ class TestDatabaseLocation:
         monkeypatch.delenv("TRADE_JOURNAL_DB", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         assert journal.db_path() == tmp_path / "trade_journal.db"
+
+    def test_windows_default_is_local_appdata_not_dot_hermes(self, monkeypatch):
+        """Hermes stores its data under %LOCALAPPDATA%\\hermes on Windows."""
+        monkeypatch.delenv("TRADE_JOURNAL_DB", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setattr(journal.sys, "platform", "win32")
+        local_appdata = r"C:\Users\Mako\AppData\Local"
+        monkeypatch.setenv("LOCALAPPDATA", local_appdata)
+        assert journal.hermes_home() == pathlib.Path(local_appdata) / "hermes"
+
+    def test_windows_falls_back_when_localappdata_is_unset(self, monkeypatch):
+        monkeypatch.delenv("TRADE_JOURNAL_DB", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        monkeypatch.setattr(journal.sys, "platform", "win32")
+        assert journal.hermes_home() == pathlib.Path.home() / "AppData" / "Local" / "hermes"
+
+    def test_posix_default_is_dot_hermes(self, monkeypatch):
+        monkeypatch.delenv("TRADE_JOURNAL_DB", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setattr(journal.sys, "platform", "linux")
+        assert journal.hermes_home().name == ".hermes"
+
+    def test_blank_env_override_is_ignored(self, monkeypatch):
+        monkeypatch.delenv("TRADE_JOURNAL_DB", raising=False)
+        monkeypatch.setenv("HERMES_HOME", "   ")
+        monkeypatch.setattr(journal.sys, "platform", "linux")
+        assert journal.hermes_home().name == ".hermes"

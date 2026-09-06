@@ -24,14 +24,28 @@ OPTION_MULTIPLIER = 100
 SCHEMA_VERSION = 1
 
 
-def db_path() -> Path:
-    """Resolve the journal database, honouring test and user overrides."""
-    override = os.environ.get("TRADE_JOURNAL_DB")
+def hermes_home() -> Path:
+    """Hermes home: HERMES_HOME, else the platform default.
+
+    Mirrors hermes_constants._get_platform_default_hermes_home(): Windows keeps
+    its data under %LOCALAPPDATA%\\hermes, not ~/.hermes.
+    """
+    override = os.environ.get("HERMES_HOME", "").strip()
     if override:
         return Path(override).expanduser()
-    home = os.environ.get("HERMES_HOME")
-    base = Path(home).expanduser() if home else Path.home() / ".hermes"
-    return base / "trade_journal.db"
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "hermes"
+    return Path.home() / ".hermes"
+
+
+def db_path() -> Path:
+    """Resolve the journal database, honouring test and user overrides."""
+    override = os.environ.get("TRADE_JOURNAL_DB", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return hermes_home() / "trade_journal.db"
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:

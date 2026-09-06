@@ -10,9 +10,35 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+
+# Windows (Git Bash / MSYS / Cygwin) keeps Hermes under %LOCALAPPDATA%\hermes,
+# not ~/.hermes. Getting this wrong installs into a directory Hermes never reads.
+IS_WINDOWS=0
+case "${OSTYPE:-}" in
+  msys* | cygwin* | win32) IS_WINDOWS=1 ;;
+esac
+
+if [ -z "${HERMES_HOME:-}" ]; then
+  if [ "$IS_WINDOWS" -eq 1 ] && [ -n "${LOCALAPPDATA:-}" ]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      HERMES_HOME="$(cygpath -u "$LOCALAPPDATA")/hermes"
+    else
+      HERMES_HOME="$HOME/AppData/Local/hermes"
+    fi
+  else
+    HERMES_HOME="$HOME/.hermes"
+  fi
+fi
+
 TARGET_DIR="$HERMES_HOME/skills/finance"
-MODE="symlink"
+
+# Symlinks on Windows need Developer Mode or an elevated shell; Git Bash
+# silently copies instead. Default to an honest copy there.
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  MODE="copy"
+else
+  MODE="symlink"
+fi
 
 for arg in "$@"; do
   case "$arg" in
@@ -68,6 +94,9 @@ chmod +x "$SOURCE_DIR"/skills/finance/*/scripts/*.py 2>/dev/null || true
 
 echo
 echo "Installed to $TARGET_DIR"
+if [ "$MODE" = "copy" ]; then
+  echo "(copied, not linked - re-run this script after pulling updates)"
+fi
 echo
 echo "Next steps:"
 echo "  1. Create a watchlist:  echo AAPL >> $HERMES_HOME/watchlist.txt"

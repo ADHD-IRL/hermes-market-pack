@@ -34,8 +34,19 @@ _crumb: str | None = None
 
 
 def hermes_home() -> Path:
-    home = os.environ.get("HERMES_HOME")
-    return Path(home).expanduser() if home else Path.home() / ".hermes"
+    """Hermes home: HERMES_HOME, else the platform default.
+
+    Mirrors hermes_constants._get_platform_default_hermes_home(): Windows keeps
+    its data under %LOCALAPPDATA%\\hermes, not ~/.hermes.
+    """
+    override = os.environ.get("HERMES_HOME", "").strip()
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "hermes"
+    return Path.home() / ".hermes"
 
 
 # ---------------------------------------------------------------------------
@@ -153,19 +164,37 @@ def journal_db() -> Path:
     return Path(override).expanduser() if override else hermes_home() / "trade_journal.db"
 
 
+def _connect_readonly(path: Path) -> sqlite3.Connection:
+    """Open the journal read-only so a brief can never mutate it.
+
+    A SQLite URI needs a real URL path: Windows backslashes and the drive
+    colon are not valid there, so the path is converted rather than
+    interpolated. If the URI form is rejected anyway, fall back to a plain
+    connection - reading is still read-only by discipline.
+    """
+    uri = "file:" + urllib.request.pathname2url(str(path)) + "?mode=ro"
+    try:
+        return sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return sqlite3.connect(path)
+
+
 def load_open_positions() -> list[dict]:
     """Read open trades from the trade-journal database, if one exists."""
     path = journal_db()
     if not path.exists():
         return []
     try:
-        # Read-only: a brief must never mutate the journal.
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM trades WHERE status='open'").fetchall()
-        conn.close()
+        conn = _connect_readonly(path)
     except sqlite3.Error:
         return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM trades WHERE status='open'").fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
     return [dict(r) for r in rows]
 
 

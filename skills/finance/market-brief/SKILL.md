@@ -44,6 +44,11 @@ NVDA   # semis
 SPY
 ```
 
+On Windows, Hermes keeps its data under `%LOCALAPPDATA%\hermes`, so the skill
+path is `%LOCALAPPDATA%\hermes\skills\finance\market-brief\scripts\` rather than
+`~/.hermes/skills/finance/market-brief/scripts/`. The examples below use the POSIX
+form; substitute accordingly.
+
 ## How to Run
 
 Invoke through the `terminal` tool:

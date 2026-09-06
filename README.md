@@ -14,25 +14,46 @@ sit alongside the bundled ones and survive `hermes update`.
 
 ## Install
 
+### Linux, macOS, WSL2
+
 ```bash
 git clone https://github.com/ADHD-IRL/hermes-market-pack.git
 cd hermes-market-pack
 ./install.sh
+echo -e "AAPL\nNVDA\nSPY" >> ~/.hermes/watchlist.txt
 ```
 
 `install.sh` symlinks the skills into `$HERMES_HOME/skills/finance/` (default
 `~/.hermes/skills/finance/`), so edits here take effect immediately. Use
-`--copy` for a snapshot instead, or `--uninstall` to remove them. Your trade
-journal is never touched by uninstall.
+`--copy` for a snapshot instead, or `--uninstall` to remove them.
 
-Then give yourself a watchlist and restart Hermes:
+### Windows (native, PowerShell)
 
-```bash
-echo -e "AAPL\nNVDA\nSPY" >> ~/.hermes/watchlist.txt
+```powershell
+git clone https://github.com/ADHD-IRL/hermes-market-pack.git
+cd hermes-market-pack
+.\install.ps1
+"AAPL" | Out-File -Append -Encoding utf8 "$env:LOCALAPPDATA\hermes\watchlist.txt"
 ```
 
+If PowerShell blocks the script, run it as
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+
+Native Windows keeps Hermes under `%LOCALAPPDATA%\hermes`, not `~/.hermes` —
+both installers and all five skills resolve this the same way Hermes itself
+does. `install.ps1` **copies** rather than symlinks, because symbolic links on
+Windows need Developer Mode or an elevated shell; re-run it after pulling
+updates, or pass `-Link` if you do have Developer Mode on. `-Uninstall`
+removes the skills.
+
+Git Bash works too — `./install.sh` detects MSYS/Cygwin and resolves the same
+`%LOCALAPPDATA%` path, also defaulting to copy.
+
+Uninstalling never touches your trade journal.
+
 **Requirements:** Python 3.10+ and nothing else. No API keys, no pip installs —
-every skill is standard library only.
+every skill is standard library only. The Hermes installer already puts a
+suitable Python on your PATH.
 
 ## The skills
 
@@ -118,6 +139,9 @@ Nothing is required. Optional environment variables (put them in
 | `WATCHLIST_FILE` | `$HERMES_HOME/watchlist.txt` | Where the watchlist lives |
 | `TRADE_JOURNAL_DB` | `$HERMES_HOME/trade_journal.db` | Where the journal lives |
 
+`$HERMES_HOME` defaults to `~/.hermes` on Linux and macOS, and to
+`%LOCALAPPDATA%\hermes` on Windows.
+
 Your journal is a local SQLite file. It is never transmitted anywhere.
 
 ## Tests
@@ -127,7 +151,7 @@ pip install pytest
 ./run_tests.sh
 ```
 
-176 tests, standard library and `unittest.mock` only, no live network calls.
+186 tests, standard library and `unittest.mock` only, no live network calls.
 The option pricing is checked against put-call parity and known payoff
 structures — a 100/110 call debit spread paid for $3.00 must show a $300 max
 loss, a $700 max profit and a breakeven at 103.

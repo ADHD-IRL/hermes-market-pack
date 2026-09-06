@@ -1,5 +1,6 @@
 """Tests for the market-brief skill. All quotes are mocked - no network."""
 
+import pathlib
 from unittest import mock
 
 import pytest
@@ -192,3 +193,64 @@ class TestJournalIntegration:
         path.write_text("this is not sqlite")
         monkeypatch.setenv("TRADE_JOURNAL_DB", str(path))
         assert brief.load_open_positions() == []
+
+    def test_reads_open_positions_through_a_readonly_connection(self, tmp_path, monkeypatch):
+        import sqlite3
+        path = tmp_path / "journal.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE trades (id INTEGER, symbol TEXT, side TEXT, qty REAL,"
+            " entry REAL, stop REAL, kind TEXT, status TEXT);"
+            "INSERT INTO trades VALUES (1,'AAPL','long',100,50.0,45.0,'stock','open');"
+            "INSERT INTO trades VALUES (2,'NVDA','long',10,20.0,18.0,'stock','closed');"
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setenv("TRADE_JOURNAL_DB", str(path))
+        rows = brief.load_open_positions()
+        assert [r["symbol"] for r in rows] == ["AAPL"]
+
+    def test_readonly_connection_refuses_writes(self, tmp_path):
+        import sqlite3
+        path = tmp_path / "journal.db"
+        sqlite3.connect(path).executescript("CREATE TABLE trades (id INTEGER);")
+        conn = brief._connect_readonly(path)
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("INSERT INTO trades VALUES (1)")
+        conn.close()
+
+    def test_path_with_spaces_is_readable(self, tmp_path, monkeypatch):
+        """Windows user directories routinely contain spaces."""
+        import sqlite3
+        spaced = tmp_path / "First Last"
+        spaced.mkdir()
+        path = spaced / "journal.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE trades (id INTEGER, symbol TEXT, side TEXT, qty REAL,"
+            " entry REAL, stop REAL, kind TEXT, status TEXT);"
+            "INSERT INTO trades VALUES (1,'AAPL','long',1,1.0,0.5,'stock','open');"
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setenv("TRADE_JOURNAL_DB", str(path))
+        assert len(brief.load_open_positions()) == 1
+
+
+class TestHermesHome:
+    def test_windows_default_is_local_appdata(self, monkeypatch):
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setattr(brief.sys, "platform", "win32")
+        local_appdata = r"C:\Users\Mako\AppData\Local"
+        monkeypatch.setenv("LOCALAPPDATA", local_appdata)
+        assert brief.hermes_home() == pathlib.Path(local_appdata) / "hermes"
+
+    def test_posix_default_is_dot_hermes(self, monkeypatch):
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setattr(brief.sys, "platform", "linux")
+        assert brief.hermes_home().name == ".hermes"
+
+    def test_watchlist_follows_hermes_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("WATCHLIST_FILE", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        assert brief.watchlist_path() == tmp_path / "watchlist.txt"

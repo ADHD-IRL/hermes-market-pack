@@ -36,6 +36,11 @@ You need the user's account equity and their risk tolerance per trade. Ask for
 both rather than assuming — 1% per trade is a common default but it is theirs
 to set, not yours.
 
+On Windows, Hermes keeps its data under `%LOCALAPPDATA%\hermes`, so the skill
+path is `%LOCALAPPDATA%\hermes\skills\finance\position-sizing\scripts\` rather than
+`~/.hermes/skills/finance/position-sizing/scripts/`. The examples below use the POSIX
+form; substitute accordingly.
+
 ## How to Run
 
 Invoke through the `terminal` tool:

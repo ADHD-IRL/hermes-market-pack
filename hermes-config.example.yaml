@@ -1,0 +1,20 @@
+# Fragments to merge into ~/.hermes/config.yaml.
+#
+# This pack needs no configuration of its own - the skills read environment
+# variables and files. Everything below is optional tuning.
+
+skills:
+  config:
+    # Short-term Treasury yield used for greeks. Affects rho and long-dated
+    # theta; the default of 0.04 is fine for short-dated analysis.
+    risk_free_rate: "0.04"
+
+# Environment variables the pack understands. Set these in ~/.hermes/.env
+# rather than here if you prefer to keep them out of config.
+#
+#   RISK_FREE_RATE=0.042        # overrides the default used for greeks
+#   WATCHLIST_FILE=~/.hermes/watchlist.txt
+#   TRADE_JOURNAL_DB=~/.hermes/trade_journal.db
+#
+# No API keys are required. Every skill in this pack uses the Python standard
+# library and public market data endpoints.

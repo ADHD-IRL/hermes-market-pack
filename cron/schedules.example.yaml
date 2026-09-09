@@ -1,0 +1,41 @@
+# Example Hermes cron jobs for this pack.
+#
+# These are natural-language prompts, not shell commands - Hermes reads them,
+# picks the right skill, and delivers the result to the platform you name.
+# Create them with `hermes cron add`, or copy the shape into your own config.
+#
+# Times are in your configured local timezone. US market hours are 09:30-16:00
+# America/New_York.
+
+jobs:
+  - name: pre-open-brief
+    schedule: "0 9 * * 1-5"          # 09:00 on weekdays, half an hour before the open
+    deliver_to: telegram
+    prompt: >
+      Run the market-brief skill. Lead with any position alerts, then indices,
+      then anything on my watchlist that moved more than 2%. Keep it under
+      ten lines.
+
+  - name: post-close-recap
+    schedule: "30 16 * * 1-5"        # 16:30 on weekdays, just after the close
+    deliver_to: telegram
+    prompt: >
+      Run the market-brief skill for an end-of-day recap. If any open position
+      closed through its stop today, say so first and remind me of the trade id.
+
+  - name: friday-performance-review
+    schedule: "0 17 * * 5"           # 17:00 on Fridays
+    deliver_to: telegram
+    prompt: >
+      Run the trade-journal stats for the last 30 days. Report win rate,
+      expectancy in R, and profit factor, and note the trade count so I can
+      judge whether the sample means anything. If any strategy tag is clearly
+      underperforming the others, point it out.
+
+  - name: weekly-vol-check
+    schedule: "0 10 * * 1"           # 10:00 on Mondays
+    deliver_to: telegram
+    prompt: >
+      For each symbol on my watchlist, run the options-chain iv command and
+      tell me which ones are in backwardation - that usually means an event is
+      priced in this week.

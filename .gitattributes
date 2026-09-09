@@ -1,0 +1,9 @@
+* text=auto
+
+# Shell scripts and Python must keep LF endings: Git Bash and the
+# Python launcher both choke on CRLF in a checked-out script.
+*.sh text eol=lf
+*.py text eol=lf
+
+# PowerShell is happiest with CRLF on Windows.
+*.ps1 text eol=crlf

@@ -63,7 +63,7 @@ suitable Python on your PATH.
 | **options-strategy** | Expiry payoff for any multi-leg position: max profit, max loss, breakevens, probability of profit |
 | **position-sizing** | Share and contract counts from a risk budget; Kelly, portfolio heat, R-multiples |
 | **trade-journal** | SQLite trade log scored in R-multiples, with win rate, expectancy and profit factor |
-| **market-brief** | Scheduled digest of indices, watchlist and open positions, with stop alerts |
+| **market-brief** | Scheduled digest of indices, watchlist and open positions, with stop alerts, unusual-volume flags and an implied-vs-realised vol read |
 
 ### Why compute greeks locally
 
@@ -151,7 +151,7 @@ pip install pytest
 ./run_tests.sh
 ```
 
-186 tests, standard library and `unittest.mock` only, no live network calls.
+221 tests, standard library and `unittest.mock` only, no live network calls.
 The option pricing is checked against put-call parity and known payoff
 structures — a 100/110 call debit spread paid for $3.00 must show a $300 max
 loss, a $700 max profit and a breakeven at 103.
@@ -170,6 +170,9 @@ Worth knowing before you rely on any of this:
 - **Fees, commissions and slippage are excluded** everywhere.
 - **Small samples lie.** Twenty journalled trades cannot separate an edge from
   luck.
+- **Implied-vs-realised vol is context, not a signal.** Options priced above
+  realised vol usually have a reason — earnings, a pending decision, a catalyst.
+  "Rich" means find out why, not sell premium.
 
 ## License
 

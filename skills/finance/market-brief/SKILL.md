@@ -64,10 +64,12 @@ you need to reason over the numbers rather than relay them.
 ## Quick Reference
 
 ```
-python $SCRIPT                                    # indices + watchlist + positions
+python $SCRIPT                                    # indices + watchlist + positions + vol
 python $SCRIPT --symbol AAPL --symbol NVDA        # ad-hoc, ignores the watchlist file
 python $SCRIPT --no-indices --mover-threshold 5   # only large watchlist moves
-python $SCRIPT --index '^VIX' --index '^GSPC'     # custom indices
+python $SCRIPT --no-iv                            # skip the vol section (much faster)
+python $SCRIPT --volume-threshold 2               # only flag volume at 2x normal or more
+python $SCRIPT --iv-limit 20                      # price more symbols for the vol section
 python $SCRIPT --json                             # structured output
 ```
 
@@ -82,7 +84,17 @@ python $SCRIPT --json                             # structured output
    of the original risk is left. Say these first, before index levels.
 4. **Schedule it with cron for unattended delivery.** See `cron/schedules.example.yaml`
    in this pack for pre-open and post-close examples.
-5. **Check the `errors` list.** A missing quote means a bad or delisted ticker,
+5. **Read volume as pace, not total.** During the session `pace` compares volume
+   against how much the name *should* have traded by this point in the day, so
+   1.5x means genuinely heavy, not "half a day gone". Outside the session it
+   compares against the full-day average. A big price move on ordinary volume is
+   weaker evidence than the same move on 2x volume.
+6. **Use the vol section to say whether options are rich or cheap.** `iv_hv_ratio`
+   divides at-the-money implied vol (nearest ~30-day expiry) by 20-day realised
+   vol. Above ~1.35 the options are pricing more movement than the stock has
+   actually delivered; below ~0.85 they are pricing less. Report it as context,
+   never as a trade instruction.
+7. **Check the `errors` list.** A missing quote means a bad or delisted ticker,
    not a flat market — surface it rather than silently omitting the symbol.
 
 ## Quick Reference: Position Fields
@@ -93,6 +105,18 @@ python $SCRIPT --json                             # structured output
 | `distance_to_stop_pct` | How far price sits from the stop, as a percent of entry |
 | `r_remaining` | Fraction of the original risk still intact; negative means through the stop |
 | `alert` | `STOP BREACHED`, `near stop`, or `no quote` |
+
+## Quick Reference: Volume and Volatility Fields
+
+| Field | Meaning |
+| --- | --- |
+| `pace` | Volume against normal for this point in the session (`basis: pace`) or against the full-day average (`basis: full session`) |
+| `session_elapsed_pct` | How far into the regular session the quote was taken |
+| `unusual` | `pace` at or above `--volume-threshold` (default 1.5) |
+| `atm_iv` / `iv_dte` | At-the-money implied vol and the expiry it came from (~30 days out) |
+| `hv20` / `hv60` | Annualised realised vol over the last 20 and 60 sessions |
+| `iv_hv_ratio` | `atm_iv / hv20` — above 1 means options price more movement than the stock has delivered |
+| `verdict` | `rich` (≥1.35), `fair`, or `cheap` (≤0.85) |
 
 ## Pitfalls
 
@@ -106,6 +130,20 @@ python $SCRIPT --json                             # structured output
   a few per day rather than every minute.
 - **Open positions come from the journal, not a broker.** They are only as
   accurate as what was logged, and manual closes made elsewhere will not show.
+- **The vol section costs two requests per symbol**, so it is capped at
+  `--iv-limit` (default 12) and can be turned off with `--no-iv`. Expect a few
+  seconds per symbol.
+- **`iv_hv_ratio` is context, not a signal.** Options are often priced above
+  realised vol for good reason — an earnings date, a pending decision, a known
+  catalyst. "Rich" does not mean "sell premium"; it means "find out why".
+- **Realised vol looks backwards.** A name that was calm for twenty sessions and
+  just gapped will show low `hv20` and a misleadingly rich-looking ratio until
+  the window catches up.
+- **Volume pace is unreliable in the first minutes of the session**, when a tiny
+  elapsed fraction turns ordinary volume into a huge multiple. It is not
+  computed before the open at all.
+- **Mutual funds and most indices have no options chain**, so they appear in the
+  quote sections but are skipped in the vol comparison.
 
 ## Verification
 

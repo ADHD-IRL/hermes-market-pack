@@ -39,3 +39,22 @@ jobs:
       For each symbol on my watchlist, run the options-chain iv command and
       tell me which ones are in backwardation - that usually means an event is
       priced in this week.
+
+  - name: trailing-buy-poll
+    schedule: "*/5 9-16 * * 1-5"     # every five minutes through the session
+    deliver_to: telegram
+    prompt: >
+      Run a trailing-buy tick for every active plan. Say nothing unless a plan
+      changed state. If one reached TRIGGERED, check whether it is ex-dividend
+      day, whether the sector is selling off or only this name, and whether there
+      is news - then record your judgement with `decide`, citing the tick ids you
+      used, and show me the order spec. Do not place anything.
+
+  - name: trailing-buy-recap
+    schedule: "0 17 * * 5"           # 17:00 on Fridays
+    deliver_to: telegram
+    prompt: >
+      Write this week's trailing-buy report to a file and tell me the headline:
+      what the trail got versus what a plain limit at the arm price would have
+      got, and how many entries that is based on. If the sample is under ten,
+      say so before quoting the edge.

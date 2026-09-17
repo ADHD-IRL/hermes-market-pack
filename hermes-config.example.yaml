@@ -15,6 +15,12 @@ skills:
 #   RISK_FREE_RATE=0.042        # overrides the default used for greeks
 #   WATCHLIST_FILE=~/.hermes/watchlist.txt
 #   TRADE_JOURNAL_DB=~/.hermes/trade_journal.db
+#   TRAILING_BUY_DB=~/.hermes/trailing_buy.db
+#   TRAILING_BUY_HALT_FILE=~/.hermes/trailing_buy.HALT
+#
+# The halt file is the trailing-buy kill switch: while it exists, every
+# trailing-buy command refuses. `trailing_buy.py halt` creates it and
+# `trailing_buy.py resume` removes it, so it works from a shell too.
 #
 # No API keys are required. Every skill in this pack uses the Python standard
 # library and public market data endpoints.

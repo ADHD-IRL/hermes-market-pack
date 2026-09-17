@@ -159,11 +159,27 @@ trailing-buy poll and recap. `cron/start-phase1.sh` sets up a complete
 two-week read-only trailing-buy trial in one command, and
 `cron/agnc-phase1.yaml` explains every number it uses.
 
+Linux, macOS, WSL2:
+
 ```bash
-./install.sh                 # if you have not already
-./cron/start-phase1.sh       # AGNC 9.98 / 9.20 / 200 shares, paper mode
+./install.sh                        # if you have not already
 ./cron/start-phase1.sh --dry-run    # see the commands first
+./cron/start-phase1.sh              # AGNC 9.98 / 9.20 / 200 shares, paper mode
 ```
+
+Windows, PowerShell:
+
+```powershell
+.\install.ps1                        # copies, so re-run after every git pull
+.\cron\start-phase1.ps1 -DryRun      # see the commands first
+.\cron\start-phase1.ps1             # AGNC 9.98 / 9.20 / 200 shares, paper mode
+```
+
+Both take a different name and levels: `NLY 18.50 17.00 100` positionally in
+bash, `-Symbol NLY -Arm 18.50 -Floor 17.00 -Shares 100` in PowerShell. The
+PowerShell version resolves `%LOCALAPPDATA%\hermes`, finds `python` or `py -3`
+rather than `python3`, and formats every number with the invariant culture so a
+machine set to comma decimals still passes `9.98` and not `9,98`.
 
 The polling job uses Hermes' `--monitor-script` mode: a cheap script runs the tick
 every five minutes and Hermes hashes its output, so an unchanged digest suppresses

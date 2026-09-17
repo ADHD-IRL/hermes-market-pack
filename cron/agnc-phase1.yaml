@@ -7,8 +7,9 @@
 # single event.
 #
 # `hermes cron add` takes one job per invocation and has no YAML import, so
-# `cron/start-phase1.sh` issues these for you - it is the thing to run. This file
-# is the explanation of what it creates and why each number is what it is.
+# `cron/start-phase1.sh` - or `cron/start-phase1.ps1` on Windows - issues these
+# for you. Those are the thing to run; this file is the explanation of what they
+# create and why each number is what it is.
 #
 # The poll job below is written as a plain every-five-minutes prompt for clarity.
 # start-phase1.sh instead attaches `--monitor-script`, which runs the tick and

@@ -64,9 +64,20 @@ if ! command -v hermes >/dev/null 2>&1; then
   exit 1
 fi
 
+# Git Bash on Windows ships `python`, not `python3`. On Windows prefer
+# cron/start-phase1.ps1, but this path has to work if you are in Git Bash.
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "No python on your PATH." >&2
+  exit 1
+fi
+
 # The notional cap has to clear the position at the arm price or plan create
 # refuses - work it out here rather than making you do the arithmetic.
-MAX_NOTIONAL=$(python3 -c "print(round($SHARES * $ARM * 1.06, 2))")
+MAX_NOTIONAL=$($PY -c "print(round($SHARES * $ARM * 1.06, 2))")
 
 echo "Symbol:    $SYMBOL"
 echo "Arm:       $ARM      Floor: $FLOOR      Shares: $SHARES"
@@ -86,7 +97,7 @@ echo "monitor   -> $MONITOR_DEST"
 # ---------------------------------------------------------------------------
 # 2. The plan
 # ---------------------------------------------------------------------------
-run python3 "$SCRIPT" plan create \
+run "$PY" "$SCRIPT" plan create \
   --symbol "$SYMBOL" \
   --arm "$ARM" \
   --floor "$FLOOR" \
@@ -164,13 +175,13 @@ want to be reminded of that before I read it. Mention the file path." \
 echo
 echo "Done. Check it took:"
 echo "  hermes cron list"
-echo "  python3 $SCRIPT plan show          # state ARMED, paper 1"
-echo "  python3 $MONITOR_DEST              # one stable line per plan"
+echo "  $PY $SCRIPT plan show          # state ARMED, paper 1"
+echo "  $PY $MONITOR_DEST              # one stable line per plan"
 echo
 echo "The gateway has to be running for cron to fire:  hermes gateway status"
 echo
 echo "Stop everything at any time:"
-echo "  python3 $SCRIPT halt --reason 'stepping away'"
+echo "  $PY $SCRIPT halt --reason 'stepping away'"
 echo
 echo "Two weeks from now, ask for the phase-1 review - the prompt is in"
 echo "cron/agnc-phase1.yaml under agnc-phase1-review."

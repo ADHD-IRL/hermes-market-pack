@@ -108,9 +108,10 @@ Nothing is ever proposed: `approve` and `record-order` both refuse on a paper pl
 and no spec is ever shown as something to place. `--paper` and `--autonomous` are
 mutually exclusive, and creating a plan with both is refused.
 
-`cron/start-phase1.sh` in this pack sets up a complete two-week read-only trial in
-one command — the plan, the monitor script, and the session, recap and report jobs.
-`cron/agnc-phase1.yaml` explains every number it picks.
+`cron/start-phase1.sh` (or `cron/start-phase1.ps1` on Windows) sets up a complete
+two-week read-only trial in one command — the plan, the monitor script, and the
+session, recap and report jobs. `cron/agnc-phase1.yaml` explains every number it
+picks. Both accept `--dry-run` / `-DryRun`.
 
 ## Unattended polling
 

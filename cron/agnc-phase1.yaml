@@ -6,7 +6,14 @@
 # re-arms, so a fortnight of running produces a series to judge rather than a
 # single event.
 #
-# Create these with `hermes cron add`, or copy the shape into your own config.
+# `hermes cron add` takes one job per invocation and has no YAML import, so
+# `cron/start-phase1.sh` issues these for you - it is the thing to run. This file
+# is the explanation of what it creates and why each number is what it is.
+#
+# The poll job below is written as a plain every-five-minutes prompt for clarity.
+# start-phase1.sh instead attaches `--monitor-script`, which runs the tick and
+# wakes the agent only when the digest changes. Same polling, roughly one LLM call
+# a day instead of seventy-eight.
 # Times are in your configured local timezone; the schedules below assume that
 # is America/New_York, where the regular session is 09:30-16:00. If you are
 # elsewhere, shift the hour fields - do not shift the market.

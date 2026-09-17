@@ -108,9 +108,30 @@ Nothing is ever proposed: `approve` and `record-order` both refuse on a paper pl
 and no spec is ever shown as something to place. `--paper` and `--autonomous` are
 mutually exclusive, and creating a plan with both is refused.
 
-`cron/agnc-phase1.yaml` in this pack is a complete two-week read-only trial —
-setup command, session polling, daily recap, weekly report and an end-of-trial
-review — ready for `hermes cron add`.
+`cron/start-phase1.sh` in this pack sets up a complete two-week read-only trial in
+one command — the plan, the monitor script, and the session, recap and report jobs.
+`cron/agnc-phase1.yaml` explains every number it picks.
+
+## Unattended polling
+
+`scripts/monitor.py` is built for Hermes cron's `--monitor-script` mode. It polls
+every live plan and prints one deliberately boring line each:
+
+```
+plan 1 AGNC TRAILING entries=0 mode=paper
+```
+
+Hermes hashes that. Identical output suppresses the agent run entirely; a changed
+digest wakes it with a diff. So the state and the entry count are all it prints —
+a price or a timestamp in there would wake the model every five minutes, which is
+the cost this mode exists to avoid.
+
+Two consequences worth knowing. A failed poll is invisible here on purpose, because
+flapping output would wake the agent on every network blip; the tick records the
+failure in the ledger either way, and the unconditional daily recap is what notices
+a watcher that has quietly stopped. And acting on a trigger changes the digest a
+second time, when the plan returns to `ARMED` with one more entry — so expect one
+extra wake per entry, and say nothing on it.
 
 ## The states
 

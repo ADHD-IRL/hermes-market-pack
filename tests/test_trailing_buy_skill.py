@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 
+import monitor
 import trailing_buy as tb
 
 
@@ -961,3 +962,93 @@ class TestDatabaseLocation:
         monkeypatch.delenv("TRAILING_BUY_HALT_FILE", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         assert tb.halt_path() == tmp_path / "trailing_buy.HALT"
+
+
+class TestMonitor:
+    """The cron monitor digest. Its whole job is to be boring when nothing happened.
+
+    Hermes hashes this output and suppresses the agent run when it is unchanged, so a
+    digest that moves on its own would wake the model every five minutes - the exact
+    cost this mode exists to avoid.
+    """
+
+    def test_a_quiet_poll_produces_identical_output_every_time(self, conn):
+        make_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", side_effect=SystemExit("no quote")):
+            first = monitor.digest(tb, conn)
+            second = monitor.digest(tb, conn)
+            third = monitor.digest(tb, conn)
+        assert first == second == third
+
+    def test_the_digest_carries_no_price_or_timestamp(self, conn):
+        make_plan(conn)
+        tick(conn, 9.94)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            line = monitor.digest(tb, conn)[0]
+        assert "9.94" not in line
+        assert "2026" not in line
+        assert line == "plan 1 AGNC TRAILING entries=0 mode=live"
+
+    def test_a_state_change_changes_the_digest(self, conn):
+        trigger_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            triggered = monitor.digest(tb, conn)
+            tb.cmd_decide(args(action="hold", rationale="no", evidence_tick_ids="3"), conn)
+            held = monitor.digest(tb, conn)
+        assert triggered != held
+        assert "TRIGGERED" in triggered[0] and "TRAILING" in held[0]
+
+    def test_a_new_entry_changes_the_digest(self, conn):
+        trigger_plan(conn, paper=True)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            before = monitor.digest(tb, conn)
+            tb.cmd_decide(args(action="buy", rationale="ok", evidence_tick_ids="3"), conn)
+            tb.cmd_order_spec(args(price=9.85), conn)
+            after = monitor.digest(tb, conn)
+        assert "entries=0" in before[0]
+        assert "entries=1" in after[0]
+
+    def test_a_failed_poll_does_not_move_the_digest(self, conn):
+        """A network blip must not wake the agent; the ledger records it regardless."""
+        make_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            healthy = monitor.digest(tb, conn)
+        with mock.patch.object(tb, "cmd_tick", side_effect=SystemExit("network")):
+            blipped = monitor.digest(tb, conn)
+        assert healthy == blipped
+
+    def test_the_kill_switch_is_announced_and_stops_polling(self, conn):
+        make_plan(conn)
+        tb.cmd_halt(args(reason="test"), conn)
+        with mock.patch.object(tb, "cmd_tick") as ticker:
+            lines = monitor.digest(tb, conn)
+        assert "KILL SWITCH SET" in lines[0]
+        ticker.assert_not_called()
+
+    def test_a_terminal_plan_drops_out_of_the_digest(self, conn):
+        make_plan(conn)
+        tb.cmd_plan_cancel(args(), conn)
+        assert monitor.digest(tb, conn) == ["no live plans"]
+
+    def test_paper_and_autonomous_plans_are_labelled(self, conn):
+        make_plan(conn, paper=True)
+        make_plan(conn, symbol="NLY", autonomous=True)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            lines = monitor.digest(tb, conn)
+        assert "mode=paper" in lines[0]
+        assert "mode=autonomous" in lines[1]
+
+    def test_the_skill_path_honours_its_override(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAILING_BUY_SCRIPT", str(tmp_path / "elsewhere.py"))
+        assert monitor.skill_path() == tmp_path / "elsewhere.py"
+
+    def test_the_skill_path_defaults_under_hermes_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRAILING_BUY_SCRIPT", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        assert monitor.skill_path() == (
+            tmp_path / "skills" / "finance" / "trailing-buy" / "scripts" / "trailing_buy.py"
+        )
+
+    def test_a_missing_install_returns_nothing_rather_than_raising(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAILING_BUY_SCRIPT", str(tmp_path / "gone.py"))
+        assert monitor.load_skill() is None

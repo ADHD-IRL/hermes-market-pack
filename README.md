@@ -155,8 +155,20 @@ python $S/trailing-buy/scripts/trailing_buy.py report --plan 1 --out ~/agnc-trai
 
 `cron/schedules.example.yaml` has ready-made jobs: a pre-open brief, a
 post-close recap, a Friday performance review, a Monday volatility check, and a
-trailing-buy poll and recap. `cron/agnc-phase1.yaml` is a complete two-week
-read-only trailing-buy trial, numbers explained.
+trailing-buy poll and recap. `cron/start-phase1.sh` sets up a complete
+two-week read-only trailing-buy trial in one command, and
+`cron/agnc-phase1.yaml` explains every number it uses.
+
+```bash
+./install.sh                 # if you have not already
+./cron/start-phase1.sh       # AGNC 9.98 / 9.20 / 200 shares, paper mode
+./cron/start-phase1.sh --dry-run    # see the commands first
+```
+
+The polling job uses Hermes' `--monitor-script` mode: a cheap script runs the tick
+every five minutes and Hermes hashes its output, so an unchanged digest suppresses
+the agent run entirely. The rules poll all session for nothing and the model is
+woken only when a plan actually changes state.
 Hermes' cron scheduler takes natural-language prompts and delivers to whichever
 platform you have wired up.
 
@@ -189,7 +201,7 @@ pip install pytest
 ./run_tests.sh
 ```
 
-351 tests, standard library and `unittest.mock` only, no live network calls.
+362 tests, standard library and `unittest.mock` only, no live network calls.
 The option pricing is checked against put-call parity and known payoff
 structures — a 100/110 call debit spread paid for $3.00 must show a $300 max
 loss, a $700 max profit and a breakeven at 103.

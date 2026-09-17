@@ -73,6 +73,7 @@ Output is JSON on stdout. A refusal is a non-zero exit with the reason on stderr
 ```
 python $SCRIPT plan create --symbol AGNC --arm 9.98 --floor 9.20 --shares 200 \
   --atr-multiple 1.0 --max-notional 2100 --max-orders-per-day 2
+python $SCRIPT plan create --symbol AGNC --arm 9.98 --floor 9.20 --shares 200 --paper
 python $SCRIPT plan list                        # what is running
 python $SCRIPT plan show --plan 1               # state, recent ticks, decisions, orders
 python $SCRIPT plan cancel --plan 1
@@ -95,6 +96,43 @@ python $SCRIPT halt --reason "stepping away"    # kill switch
 python $SCRIPT resume
 ```
 
+## Paper mode
+
+`--paper` is the read-only phase, and it is where a new plan should start. A buy
+decision records a **shadow entry** at the reference price, re-arms the plan, and
+returns to watching — so a fortnight of running produces a series of entries to judge
+rather than a single event. Every guardrail still runs, so the trial exercises the
+safety layer for real.
+
+Nothing is ever proposed: `approve` and `record-order` both refuse on a paper plan,
+and no spec is ever shown as something to place. `--paper` and `--autonomous` are
+mutually exclusive, and creating a plan with both is refused.
+
+`cron/start-phase1.sh` in this pack sets up a complete two-week read-only trial in
+one command — the plan, the monitor script, and the session, recap and report jobs.
+`cron/agnc-phase1.yaml` explains every number it picks.
+
+## Unattended polling
+
+`scripts/monitor.py` is built for Hermes cron's `--monitor-script` mode. It polls
+every live plan and prints one deliberately boring line each:
+
+```
+plan 1 AGNC TRAILING entries=0 mode=paper
+```
+
+Hermes hashes that. Identical output suppresses the agent run entirely; a changed
+digest wakes it with a diff. So the state and the entry count are all it prints —
+a price or a timestamp in there would wake the model every five minutes, which is
+the cost this mode exists to avoid.
+
+Two consequences worth knowing. A failed poll is invisible here on purpose, because
+flapping output would wake the agent on every network blip; the tick records the
+failure in the ledger either way, and the unconditional daily recap is what notices
+a watcher that has quietly stopped. And acting on a trigger changes the digest a
+second time, when the plan returns to `ARMED` with one more entry — so expect one
+extra wake per entry, and say nothing on it.
+
 ## The states
 
 ```
@@ -108,6 +146,9 @@ ARMED ──price ≤ arm──▶ TRAILING ──price ≥ low + k·ATR──�
                                                      ORDERED ──▶ FILLED
 ```
 
+On a paper plan the right-hand branch never happens: `order-spec` records a shadow
+entry and goes straight back to `ARMED`.
+
 `HALTED` is terminal and never clears itself. `resume` does not touch it — that is
 deliberate, and `plan rearm` is the human saying they have looked at why it stopped.
 
@@ -115,7 +156,8 @@ deliberate, and `plan rearm` is the human saying they have looked at why it stop
 
 1. **Create the plan with the user's numbers, not yours.** Arm, floor, shares and the
    notional cap are theirs to set. If they have not named a floor, ask — a trailing buy
-   without one is a falling-knife catcher.
+   without one is a falling-knife catcher. Default to `--paper` unless they have
+   already run a read-only trial and told you what it showed.
 2. **Run the watcher.** `watch` for a session you are attending, or schedule `tick` on
    Hermes cron for unattended polling. State lives in SQLite, so a killed process loses
    at most one poll, never the running low.
@@ -202,7 +244,17 @@ reachable from a decision.
   cannot separate an edge from luck. Two to four weeks of read-only logging is the point
   at which the comparison starts meaning something.
 - **The agent's entry beating a static limit is not proof it will keep doing so.** Say
-  what the sample size is whenever you quote the edge.
+  what the sample size is whenever you quote the edge. Lead with the entry count, not
+  the number — under ten entries it is noise.
+- **`capture_pct` is withheld once a run has more than one entry.** The run low belongs
+  to whichever cycle was worst, not to all of them, so the single-entry figure would be
+  misleading. Report `entries` and the average instead.
+- **A shadow entry fills at its own limit by assumption.** Real fills are better or
+  worse. This is the read-only phase, not a backtest engine, and the paper edge is the
+  optimistic end of the range.
+- **A paper run needs its caps raised.** The default of four orders per plan stops a
+  two-week trial in week one. Set `--max-orders-total` to something like ten trading
+  days' worth.
 - **Losses are the user's.** If they run an autonomous plan, orders are proposed without
   waiting for them. Every other guardrail still applies, but the approval step is gone.
 

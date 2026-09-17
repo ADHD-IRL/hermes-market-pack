@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 
+import monitor
 import trailing_buy as tb
 
 
@@ -39,7 +40,7 @@ def make_plan(conn, **overrides):
         symbol="AGNC", arm=9.98, floor=9.20, shares=200.0, atr_multiple=1.0,
         max_notional=2100.0, max_orders_per_day=2, max_orders_total=4,
         cooldown_seconds=0, limit_band_pct=0.5, limit_offset_pct=0.1,
-        stale_seconds=180, autonomous=False, no_atr=True, notes=None,
+        stale_seconds=180, autonomous=False, paper=False, no_atr=True, notes=None,
     )
     payload.update(overrides)
     return tb.cmd_plan_create(args(**payload), conn)
@@ -455,6 +456,103 @@ class TestDecide:
             tb.cmd_decide(args(action="sell", rationale="x", evidence_tick_ids="1"), conn)
 
 
+class TestPaperMode:
+    """Shadow running: the read-only phase has to produce something to judge."""
+
+    def _shadow_entry(self, conn, **overrides):
+        trigger_plan(conn, paper=True, **overrides)
+        tb.cmd_decide(args(action="buy", rationale="clean", evidence_tick_ids="1,2,3"), conn)
+        return tb.cmd_order_spec(args(price=9.85), conn)
+
+    def test_a_paper_buy_records_an_entry_without_proposing_one(self, conn):
+        out = self._shadow_entry(conn)
+        assert out["paper"] is True
+        assert out["shadow_entry"] == 9.86
+        assert conn.execute("SELECT stage FROM orders WHERE id=1").fetchone()[0] == "shadow"
+
+    def test_a_shadow_entry_fills_at_its_own_limit(self, conn):
+        self._shadow_entry(conn)
+        assert conn.execute("SELECT fill_price FROM orders WHERE id=1").fetchone()[0] == 9.86
+
+    def test_a_paper_plan_rearms_so_the_run_keeps_collecting(self, conn):
+        out = self._shadow_entry(conn)
+        assert out["state"] == tb.ARMED
+        assert row(conn)["running_low"] is None
+
+    def test_a_paper_plan_still_runs_every_guardrail(self, conn):
+        trigger_plan(conn, paper=True)
+        tb.cmd_decide(args(action="buy", rationale="clean", evidence_tick_ids="3"), conn)
+        row(conn, max_notional=500)
+        with pytest.raises(SystemExit, match="Refused by guardrails"):
+            tb.cmd_order_spec(args(price=9.85), conn)
+
+    def test_a_paper_plan_has_nothing_to_approve(self, conn):
+        self._shadow_entry(conn)
+        with pytest.raises(SystemExit, match="nothing was ever proposed"):
+            tb.cmd_approve(args(), conn)
+
+    def test_a_paper_plan_has_no_broker_response_to_record(self, conn):
+        self._shadow_entry(conn)
+        with pytest.raises(SystemExit, match="no broker was ever called"):
+            tb.cmd_record_order(args(stage="filled", fill_price=9.86), conn)
+
+    def test_paper_and_autonomous_contradict_each_other(self, conn):
+        with pytest.raises(SystemExit, match="Pick one"):
+            make_plan(conn, paper=True, autonomous=True)
+
+    def test_several_shadow_entries_average_into_one_comparison(self, conn):
+        self._shadow_entry(conn, cooldown_seconds=0, max_orders_per_day=9, max_orders_total=9)
+        tick(conn, 9.60)
+        tick(conn, 9.80)
+        tb.cmd_decide(args(action="buy", rationale="again", evidence_tick_ids="5"), conn)
+        tb.cmd_order_spec(args(price=9.65), conn)
+        orders = conn.execute("SELECT * FROM orders WHERE plan_id=1 ORDER BY id").fetchall()
+        entry = tb.agent_entry(orders)
+        assert entry["entries"] == 2
+        assert entry["shadow"] is True
+        assert entry["price"] == pytest.approx((9.86 + 9.66) / 2, abs=1e-4)
+
+    def test_capture_is_withheld_once_there_is_more_than_one_entry(self, conn):
+        self._shadow_entry(conn, cooldown_seconds=0, max_orders_per_day=9, max_orders_total=9)
+        tick(conn, 9.60)
+        tick(conn, 9.80)
+        tb.cmd_decide(args(action="buy", rationale="again", evidence_tick_ids="5"), conn)
+        tb.cmd_order_spec(args(price=9.65), conn)
+        ticks = conn.execute("SELECT * FROM ticks WHERE plan_id=1 ORDER BY id").fetchall()
+        orders = conn.execute("SELECT * FROM orders WHERE plan_id=1 ORDER BY id").fetchall()
+        out = tb.compare(row(conn), ticks, orders)
+        assert out["entries"] == 2
+        assert out["capture_pct"] is None
+        assert "not all of them" in out["capture_note"]
+
+    def test_the_chart_marks_every_entry_not_their_average(self, conn, tmp_path):
+        self._shadow_entry(conn, cooldown_seconds=0, max_orders_per_day=9, max_orders_total=9)
+        tick(conn, 9.60)
+        tick(conn, 9.80)
+        tb.cmd_decide(args(action="buy", rationale="again", evidence_tick_ids="5"), conn)
+        tb.cmd_order_spec(args(price=9.65), conn)
+        target = tmp_path / "paper.html"
+        tb.cmd_report(args(out=str(target)), conn)
+        body = target.read_text(encoding="utf-8")
+        assert body.count('class="marker agent"') == 2   # one dot per entry
+        assert body.count("shadow entry") == 1           # labelled once, not twice
+
+    def test_an_entry_is_drawn_on_the_tick_its_decision_cited(self, conn, tmp_path):
+        """The evidence chain places the dot, not the second-resolution timestamp."""
+        self._shadow_entry(conn)  # decision cited ticks 1,2,3 -> the entry sits on tick 3
+        ticks = conn.execute("SELECT * FROM ticks WHERE plan_id=1 ORDER BY id").fetchall()
+        orders = conn.execute("SELECT * FROM orders WHERE plan_id=1 ORDER BY id").fetchall()
+        decisions = conn.execute("SELECT * FROM decisions WHERE plan_id=1 ORDER BY id").fetchall()
+        by_id = {t["id"]: i for i, t in enumerate(ticks)}
+        assert tb._tick_for(ticks, by_id, tb._cited_tick(decisions), orders[0]) == 2
+
+    def test_the_report_marks_a_paper_plan_as_paper(self, conn, tmp_path):
+        self._shadow_entry(conn)
+        target = tmp_path / "paper.html"
+        tb.cmd_report(args(out=str(target)), conn)
+        assert 'class="state paper">paper<' in target.read_text(encoding="utf-8")
+
+
 class TestOrderGuardrails:
     def _spec(self, conn, **overrides):
         spec = tb.build_spec(row(conn), 9.85)
@@ -864,3 +962,93 @@ class TestDatabaseLocation:
         monkeypatch.delenv("TRAILING_BUY_HALT_FILE", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         assert tb.halt_path() == tmp_path / "trailing_buy.HALT"
+
+
+class TestMonitor:
+    """The cron monitor digest. Its whole job is to be boring when nothing happened.
+
+    Hermes hashes this output and suppresses the agent run when it is unchanged, so a
+    digest that moves on its own would wake the model every five minutes - the exact
+    cost this mode exists to avoid.
+    """
+
+    def test_a_quiet_poll_produces_identical_output_every_time(self, conn):
+        make_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", side_effect=SystemExit("no quote")):
+            first = monitor.digest(tb, conn)
+            second = monitor.digest(tb, conn)
+            third = monitor.digest(tb, conn)
+        assert first == second == third
+
+    def test_the_digest_carries_no_price_or_timestamp(self, conn):
+        make_plan(conn)
+        tick(conn, 9.94)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            line = monitor.digest(tb, conn)[0]
+        assert "9.94" not in line
+        assert "2026" not in line
+        assert line == "plan 1 AGNC TRAILING entries=0 mode=live"
+
+    def test_a_state_change_changes_the_digest(self, conn):
+        trigger_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            triggered = monitor.digest(tb, conn)
+            tb.cmd_decide(args(action="hold", rationale="no", evidence_tick_ids="3"), conn)
+            held = monitor.digest(tb, conn)
+        assert triggered != held
+        assert "TRIGGERED" in triggered[0] and "TRAILING" in held[0]
+
+    def test_a_new_entry_changes_the_digest(self, conn):
+        trigger_plan(conn, paper=True)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            before = monitor.digest(tb, conn)
+            tb.cmd_decide(args(action="buy", rationale="ok", evidence_tick_ids="3"), conn)
+            tb.cmd_order_spec(args(price=9.85), conn)
+            after = monitor.digest(tb, conn)
+        assert "entries=0" in before[0]
+        assert "entries=1" in after[0]
+
+    def test_a_failed_poll_does_not_move_the_digest(self, conn):
+        """A network blip must not wake the agent; the ledger records it regardless."""
+        make_plan(conn)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            healthy = monitor.digest(tb, conn)
+        with mock.patch.object(tb, "cmd_tick", side_effect=SystemExit("network")):
+            blipped = monitor.digest(tb, conn)
+        assert healthy == blipped
+
+    def test_the_kill_switch_is_announced_and_stops_polling(self, conn):
+        make_plan(conn)
+        tb.cmd_halt(args(reason="test"), conn)
+        with mock.patch.object(tb, "cmd_tick") as ticker:
+            lines = monitor.digest(tb, conn)
+        assert "KILL SWITCH SET" in lines[0]
+        ticker.assert_not_called()
+
+    def test_a_terminal_plan_drops_out_of_the_digest(self, conn):
+        make_plan(conn)
+        tb.cmd_plan_cancel(args(), conn)
+        assert monitor.digest(tb, conn) == ["no live plans"]
+
+    def test_paper_and_autonomous_plans_are_labelled(self, conn):
+        make_plan(conn, paper=True)
+        make_plan(conn, symbol="NLY", autonomous=True)
+        with mock.patch.object(tb, "cmd_tick", return_value={}):
+            lines = monitor.digest(tb, conn)
+        assert "mode=paper" in lines[0]
+        assert "mode=autonomous" in lines[1]
+
+    def test_the_skill_path_honours_its_override(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAILING_BUY_SCRIPT", str(tmp_path / "elsewhere.py"))
+        assert monitor.skill_path() == tmp_path / "elsewhere.py"
+
+    def test_the_skill_path_defaults_under_hermes_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRAILING_BUY_SCRIPT", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        assert monitor.skill_path() == (
+            tmp_path / "skills" / "finance" / "trailing-buy" / "scripts" / "trailing_buy.py"
+        )
+
+    def test_a_missing_install_returns_nothing_rather_than_raising(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAILING_BUY_SCRIPT", str(tmp_path / "gone.py"))
+        assert monitor.load_skill() is None

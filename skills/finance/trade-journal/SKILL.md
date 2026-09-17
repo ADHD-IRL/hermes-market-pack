@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [Journal, Performance, Trading, Risk, Finance]
     category: finance
-    related_skills: [position-sizing, options-strategy, market-brief]
+    related_skills: [position-sizing, market-brief, trailing-buy]
 ---
 
 # Trade Journal Skill

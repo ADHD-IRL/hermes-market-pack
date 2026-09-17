@@ -42,7 +42,7 @@ if ($env:HERMES_HOME -and $env:HERMES_HOME.Trim()) {
 }
 
 $TargetDir = Join-Path $HermesHome 'skills\finance'
-$Skills = @('options-chain', 'options-strategy', 'position-sizing', 'trade-journal', 'market-brief')
+$Skills = @('options-chain', 'options-strategy', 'position-sizing', 'trade-journal', 'market-brief', 'trailing-buy')
 
 if ($Uninstall) {
     foreach ($skill in $Skills) {

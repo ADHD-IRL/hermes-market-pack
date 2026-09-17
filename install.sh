@@ -49,7 +49,7 @@ for arg in "$@"; do
   esac
 done
 
-SKILLS=(options-chain options-strategy position-sizing trade-journal market-brief)
+SKILLS=(options-chain options-strategy position-sizing trade-journal market-brief trailing-buy)
 
 if [ "$MODE" = "uninstall" ]; then
   for skill in "${SKILLS[@]}"; do

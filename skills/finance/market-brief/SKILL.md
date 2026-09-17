@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [Market, Watchlist, Cron, Reporting, Finance]
     category: finance
-    related_skills: [trade-journal, options-chain, position-sizing]
+    related_skills: [trade-journal, options-chain, trailing-buy]
 ---
 
 # Market Brief Skill

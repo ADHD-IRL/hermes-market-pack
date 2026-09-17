@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [Risk, Sizing, Kelly, Trading, Finance]
     category: finance
-    related_skills: [options-strategy, trade-journal, options-chain]
+    related_skills: [options-strategy, trade-journal, trailing-buy]
 ---
 
 # Position Sizing Skill

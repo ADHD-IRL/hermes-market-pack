@@ -98,6 +98,7 @@ GUARDRAIL_COLUMNS = (
     "cooldown_seconds",
     "limit_band_pct",
     "autonomous",
+    "paper",
 )
 
 _cookie_jar = CookieJar()
@@ -165,6 +166,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             limit_offset_pct   REAL    NOT NULL,
             stale_seconds      INTEGER NOT NULL,
             autonomous         INTEGER NOT NULL DEFAULT 0,
+            paper              INTEGER NOT NULL DEFAULT 0,
             state              TEXT    NOT NULL DEFAULT 'ARMED',
             state_seq          INTEGER NOT NULL DEFAULT 0,
             running_low        REAL,
@@ -635,6 +637,11 @@ def cmd_plan_create(args, conn) -> dict:
         raise SystemExit("Shares must be positive.")
     if args.atr_multiple <= 0:
         raise SystemExit("ATR multiple must be positive.")
+    if args.paper and args.autonomous:
+        raise SystemExit(
+            "--paper and --autonomous contradict each other: one never reaches a broker, "
+            "the other skips the approval before it does. Pick one."
+        )
     if args.shares * args.arm > args.max_notional:
         raise SystemExit(
             f"{args.shares} shares at the arm price is {args.shares * args.arm:.2f}, "
@@ -648,9 +655,9 @@ def cmd_plan_create(args, conn) -> dict:
         """INSERT INTO plans (symbol, arm_price, floor_price, shares, atr_multiple,
                               max_notional, max_orders_per_day, max_orders_total,
                               cooldown_seconds, limit_band_pct, limit_offset_pct,
-                              stale_seconds, autonomous, state, state_seq,
+                              stale_seconds, autonomous, paper, state, state_seq,
                               atr, atr_asof, created_at, updated_at, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)""",
         (
             symbol,
             args.arm,
@@ -665,6 +672,7 @@ def cmd_plan_create(args, conn) -> dict:
             args.limit_offset_pct,
             args.stale_seconds,
             1 if args.autonomous else 0,
+            1 if args.paper else 0,
             ARMED,
             measured,
             stamp[:10] if measured else None,
@@ -683,6 +691,12 @@ def cmd_plan_create(args, conn) -> dict:
         result["warning_autonomous"] = (
             "Autonomous mode: order specs are emitted without waiting for `approve`. "
             "Every other guardrail still applies."
+        )
+    if args.paper:
+        result["note_paper"] = (
+            "Paper mode: a buy decision records a shadow entry at the reference price and "
+            "re-arms the plan. Nothing is ever proposed to a broker, and the report has "
+            "something to compare."
         )
     return result
 
@@ -1167,23 +1181,50 @@ def cmd_order_spec(args, conn) -> dict:
 
     key = idempotency_key(plan, spec)
     spec["idempotency_key"] = key
+    stage = "shadow" if plan["paper"] else "proposed"
     conn.execute(
         """INSERT INTO orders (plan_id, decision_id, at, idempotency_key, stage, spec,
-                               limit_price, shares)
-           VALUES (?,?,?,?,?,?,?,?)""",
+                               limit_price, shares, fill_price)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             plan["id"],
             decision["id"],
             _now(),
             key,
-            "proposed",
+            stage,
             json.dumps(spec, sort_keys=True),
             spec["limit_price"],
             spec["quantity"],
+            # A shadow entry fills at its own limit by assumption. Real fills are
+            # better or worse; this is the read-only phase, not a backtest engine.
+            spec["limit_price"] if plan["paper"] else None,
         ),
     )
     conn.execute("UPDATE decisions SET consumed=1 WHERE id=?", (decision["id"],))
     conn.commit()
+
+    if plan["paper"]:
+        # Re-arm rather than finish: two weeks of shadow running is only worth
+        # anything if it collects more than one sample.
+        conn.execute(
+            "UPDATE plans SET running_low=NULL, trigger_price=NULL WHERE id=?", (plan["id"],)
+        )
+        conn.commit()
+        _set_state(conn, plan, ARMED)
+        return {
+            "plan_id": plan["id"],
+            "decision_id": decision["id"],
+            "paper": True,
+            "state": ARMED,
+            "reference_price": price,
+            "shadow_entry": spec["limit_price"],
+            "order_spec": spec,
+            "guardrails_passed": True,
+            "next": (
+                "Paper plan: this entry was recorded, not proposed. Nothing reached a "
+                "broker. The plan is re-armed and watching again."
+            ),
+        }
 
     if plan["autonomous"]:
         _set_state(conn, plan, ORDERED)
@@ -1212,6 +1253,11 @@ def cmd_order_spec(args, conn) -> dict:
 def cmd_approve(args, conn) -> dict:
     _require_not_halted()
     plan = _load_plan(conn, args.plan)
+    if plan["paper"]:
+        raise SystemExit(
+            f"Plan {plan['id']} is a paper plan. There is nothing to approve because "
+            "nothing was ever proposed."
+        )
     if plan["state"] != PENDING_APPROVAL:
         raise SystemExit(f"Plan {plan['id']} is {plan['state']}; there is nothing awaiting approval.")
     order = conn.execute(
@@ -1250,6 +1296,11 @@ def cmd_reject(args, conn) -> dict:
 def cmd_record_order(args, conn) -> dict:
     """Write back what the broker MCP said. This skill never calls it."""
     plan = _load_plan(conn, args.plan)
+    if plan["paper"]:
+        raise SystemExit(
+            f"Plan {plan['id']} is a paper plan, so no broker was ever called and there "
+            "is nothing to record."
+        )
     order = conn.execute(
         "SELECT * FROM orders WHERE plan_id=? ORDER BY id DESC LIMIT 1", (plan["id"],)
     ).fetchone()
@@ -1375,10 +1426,26 @@ def baseline_entry(plan, ticks) -> dict:
 
 
 def agent_entry(orders) -> dict:
-    """What the trail actually got, if anything."""
-    for order in orders:
-        if order["stage"] == "filled" and order["fill_price"] is not None:
-            return {"filled": True, "price": order["fill_price"], "at": order["at"], "order_id": order["id"]}
+    """What the trail got, averaged over however many entries it took.
+
+    A paper run re-arms after every shadow entry, so a fortnight of shadow running
+    produces a series rather than one number. The average is the fair comparison
+    against a resting limit that always fills at the same price - and `entries` is
+    what says whether the comparison means anything yet.
+    """
+    fills = [
+        o for o in orders
+        if o["stage"] in ("filled", "shadow") and o["fill_price"] is not None
+    ]
+    if fills:
+        return {
+            "filled": True,
+            "price": round(sum(o["fill_price"] for o in fills) / len(fills), 4),
+            "at": fills[-1]["at"],
+            "order_id": fills[-1]["id"],
+            "entries": len(fills),
+            "shadow": all(o["stage"] == "shadow" for o in fills),
+        }
     for order in orders:
         if order["stage"] in ("proposed", "placed"):
             return {
@@ -1386,9 +1453,11 @@ def agent_entry(orders) -> dict:
                 "price": order["limit_price"],
                 "at": order["at"],
                 "order_id": order["id"],
+                "entries": 0,
+                "shadow": False,
                 "proposed": True,
             }
-    return {"filled": False, "price": None, "at": None, "order_id": None}
+    return {"filled": False, "price": None, "at": None, "order_id": None, "entries": 0, "shadow": False}
 
 
 def compare(plan, ticks, orders) -> dict:
@@ -1412,16 +1481,26 @@ def compare(plan, ticks, orders) -> dict:
         "total_edge": None,
         "capture_pct": None,
     }
+    out["entries"] = agent.get("entries", 0)
+    out["paper"] = bool(plan["paper"])
+
     if base["filled"] and agent["price"] is not None:
         edge = round(base["price"] - agent["price"], 4)
         out["edge_per_share"] = edge
         out["total_edge"] = round(edge * plan["shares"], 2)
         # How much of the distance between the resting limit and the actual low the
         # trail captured. 100% means it bought the bottom; 0% means it did no better
-        # than the limit would have.
+        # than the limit would have. Only meaningful for a single entry: across a
+        # fortnight of re-arms the "low" belongs to whichever day was worst, not to
+        # the cycle any given entry was made in.
         available = base["price"] - low if low is not None else 0
-        if available > 0:
+        if available > 0 and out["entries"] <= 1:
             out["capture_pct"] = round(100.0 * edge / available, 1)
+        elif out["entries"] > 1:
+            out["capture_note"] = (
+                "Not computed across multiple entries - the run low belongs to one cycle, "
+                "not all of them."
+            )
     return out
 
 
@@ -1444,7 +1523,7 @@ def _scale(values, size, pad_lo, pad_hi):
     return lo, hi, to_px
 
 
-def _price_track_svg(plan, ticks, comparison) -> str:
+def _price_track_svg(plan, ticks, comparison, orders, decisions) -> str:
     """The price track: one line, three labelled reference levels, entry markers.
 
     Change over time with one measure, so it is a line chart on one axis. The arm,
@@ -1512,6 +1591,8 @@ def _price_track_svg(plan, ticks, comparison) -> str:
     def marker(index, price, css, label, below):
         """A marker plus a label that keeps clear of the plot edges and the levels."""
         mx, my = x(index), y(price)
+        if not label:
+            return f'<circle cx="{mx}" cy="{my}" r="5" class="marker {css}"/>' 
         if index == 0:
             anchor, lx = "start", mx + 9
         elif index == len(prices) - 1:
@@ -1540,12 +1621,29 @@ def _price_track_svg(plan, ticks, comparison) -> str:
                 labelled.add(i)
                 break
 
+    # Every entry gets its own dot, placed at the tick nearest it in time. Plotting
+    # one dot at the average would draw a price the trail never actually paid.
     agent = comparison["agent"]
-    if agent["price"] is not None:
-        # The entry lands at the tick closest in price, which is where it happened.
+    fills = [o for o in orders if o["stage"] in ("filled", "shadow") and o["fill_price"] is not None]
+    if fills:
+        shadow = all(o["stage"] == "shadow" for o in fills)
+        by_id = {t["id"]: i for i, t in enumerate(ticks)}
+        cited = _cited_tick(decisions)
+        for n, order in enumerate(fills):
+            index = _tick_for(ticks, by_id, cited, order)
+            # Only the first is labelled; the orders table carries the rest, and a
+            # label on every dot is the thing that stops labels working.
+            text = ("shadow entry" if shadow else "agent entry") if n == 0 else ""
+            # An entry fires on a bounce, so it usually sits on a local peak - put the
+            # label on the open side rather than through the line it belongs to.
+            markers.append(
+                marker(index, order["fill_price"], "agent", text, below=not _is_peak(prices, index))
+            )
+            if text:
+                labelled.add(index)
+    elif agent["price"] is not None:
         index = min(range(len(prices)), key=lambda i: abs(prices[i] - agent["price"]))
-        text = "agent entry" if agent["filled"] else "proposed"
-        markers.append(marker(index, agent["price"], "agent", text, below=True))
+        markers.append(marker(index, agent["price"], "agent", "proposed", below=True))
         labelled.add(index)
 
     # An invisible hit target per point, wider than the 8px marker spec, carrying a
@@ -1589,6 +1687,44 @@ def _price_track_svg(plan, ticks, comparison) -> str:
 </figure>"""
 
 
+def _is_peak(prices, index: int) -> bool:
+    """Whether this point sits above its neighbours, so a label below it is clear."""
+    left = prices[index - 1] if index > 0 else prices[index]
+    right = prices[index + 1] if index + 1 < len(prices) else prices[index]
+    return prices[index] >= left and prices[index] >= right
+
+
+def _cited_tick(decisions) -> dict:
+    """Decision id -> the last tick id it cited."""
+    out = {}
+    for decision in decisions:
+        try:
+            evidence = json.loads(decision["evidence"])
+        except (TypeError, ValueError):
+            continue
+        if evidence:
+            out[decision["id"]] = max(evidence)
+    return out
+
+
+def _tick_for(ticks, by_id: dict, cited: dict, order) -> int:
+    """Which tick to draw an entry on.
+
+    The evidence chain answers this exactly: the order carries its decision, the
+    decision cites the ticks it was made from, and the last of those is the poll the
+    entry came out of. Timestamps are only the fallback, and a poor one - they are
+    second-resolution, so a fast replay puts several ticks on the same second.
+    """
+    tick_id = cited.get(order["decision_id"])
+    if tick_id in by_id:
+        return by_id[tick_id]
+    index = 0
+    for i, tick in enumerate(ticks):
+        if tick["at"] <= order["at"]:
+            index = i
+    return index
+
+
 def _esc(text) -> str:
     return html.escape("" if text is None else str(text))
 
@@ -1616,7 +1752,21 @@ def _stat_tiles(comparison) -> str:
 
     agent = comparison["agent"]
     agent_value = _fmt(agent["price"])
-    agent_note = "filled" if agent["filled"] else ("proposed, not filled" if agent["price"] else "no entry")
+    entries = comparison.get("entries", 0)
+    if agent.get("shadow"):
+        agent_note = f"{entries} shadow entr{'y' if entries == 1 else 'ies'}, averaged"
+    elif agent["filled"]:
+        agent_note = "filled" if entries == 1 else f"{entries} fills, averaged"
+    elif agent["price"]:
+        agent_note = "proposed, not filled"
+    else:
+        agent_note = "no entry"
+
+    low_note = (
+        f"captured {_fmt(comparison['capture_pct'], 1)}% of the drop"
+        if comparison["capture_pct"] is not None
+        else "single-entry comparison only"
+    )
     base = comparison["baseline"]
 
     return f"""<section class="headline">
@@ -1629,7 +1779,7 @@ def _stat_tiles(comparison) -> str:
     {tile("Agent entry", agent_value, agent_note)}
     {tile("Static limit entry", _fmt(base["price"]), "filled" if base["filled"] else "never reached")}
     {tile("Edge per share", _fmt(comparison["edge_per_share"], 4), "positive means the trail bought cheaper")}
-    {tile("Low seen", _fmt(comparison["session_low"]), f"captured {_fmt(comparison['capture_pct'], 1)}% of the drop")}
+    {tile("Low seen", _fmt(comparison["session_low"]), low_note)}
   </div>
 </section>"""
 
@@ -1684,20 +1834,24 @@ def _plan_section(plan, ticks, decisions, orders) -> str:
 
     return f"""<article class="plan">
   <header>
-    <h2>{_esc(plan['symbol'])} <span class="state {_esc(plan['state'].lower())}">{_esc(plan['state'])}</span></h2>
+    <h2>{_esc(plan['symbol'])} <span class="state {_esc(plan['state'].lower())}">{_esc(plan['state'])}</span>{
+      '<span class="state paper">paper</span>' if plan['paper'] else ''}</h2>
     <p class="sub">plan {plan['id']} · armed at {_fmt(plan['arm_price'])} · floor {_fmt(plan['floor_price'])}
        · {_fmt(plan['atr_multiple'], 2)}x ATR{f" ({_fmt(plan['atr'], 4)})" if plan['atr'] else ""}
        · {len(ticks)} polls</p>
   </header>
   {_stat_tiles(comparison)}
-  {_price_track_svg(plan, ticks, comparison)}
+  {_price_track_svg(plan, ticks, comparison, orders, decisions)}
   <h3>Decisions</h3>
   <p class="sub">Every judgement the model made, with the tick ids it cited. A decision
      with no evidence behind it was never recorded.</p>
   {_table(["id", "at", "action", "evidence ticks", "model", "rationale"], decision_rows)}
   <h3>Orders</h3>
-  <p class="sub">Specs this skill emitted. Placement happened elsewhere; these rows are
-     what was proposed and what the broker reported back.</p>
+  <p class="sub">{
+     "Shadow entries: what the trail would have paid, recorded and never proposed."
+     if plan["paper"] else
+     "Specs this skill emitted. Placement happened elsewhere; these rows are what was "
+     "proposed and what the broker reported back."}</p>
   {_table(["id", "at", "stage", "shares", "limit", "fill", "key"], order_rows)}
   <h3>Ticks</h3>
   <p class="sub">The full poll log - the same numbers the chart plots, so nothing is
@@ -1737,6 +1891,7 @@ h3 {{ font-size: 15px; margin: 32px 0 4px; }}
          color: var(--text-secondary); vertical-align: middle; margin-left: 6px; }}
 .state.halted, .state.cancelled {{ color: var(--floor); border-color: var(--floor); }}
 .state.filled {{ color: var(--good); border-color: var(--good); }}
+.state.paper {{ color: var(--trigger); border-color: var(--trigger); }}
 
 .headline {{ display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; margin: 18px 0 8px; }}
 .herobox {{ flex: 1 1 190px; }}
@@ -1797,8 +1952,10 @@ def render_report(plans: list, data: dict, generated_at: str) -> str:
 <main>
   <h1>Trailing buy report</h1>
   <p class="sub">Generated {_esc(generated_at)} · what following the drop got, against what a
-     resting limit at the arm price would have got. Delayed, unofficial quotes; fees and
-     slippage excluded; nothing here is financial advice.</p>
+     resting limit at the arm price would have got. A <strong>paper</strong> badge means the
+     entries were recorded, never proposed — no order reached a broker. Delayed, unofficial
+     quotes; fees and slippage excluded; a handful of entries cannot separate an edge from
+     luck; nothing here is financial advice.</p>
   {sections}
   <footer>hermes-market-pack · trailing-buy. This report describes proposals and recorded
      fills. The skill itself never placed an order.</footer>
@@ -1861,6 +2018,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--autonomous",
         action="store_true",
         help="Skip the approval step. Every other guardrail still applies.",
+    )
+    p_create.add_argument(
+        "--paper",
+        action="store_true",
+        help="Shadow mode: record what it would have bought and re-arm. Never proposes an order.",
     )
     p_create.add_argument("--no-atr", action="store_true", help="Skip the ATR fetch (offline)")
     p_create.add_argument("--notes")

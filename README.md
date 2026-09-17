@@ -114,9 +114,12 @@ there news? Its answer comes back through `decide` — which refuses any decisio
 does not cite the tick ids behind it — and is then checked against limits it has no
 way to reach.
 
-Run it read-only for a few weeks first. `report` renders what the trail would have got
-against what your plain limit would have got, and until that comparison says something,
-there is nothing to act on.
+Run it read-only for a few weeks first. `--paper` records what it *would* have bought
+at and re-arms, so a fortnight produces a series rather than one event, with every
+guardrail still running. `report` then renders those entries against what your plain
+limit would have got. `cron/agnc-phase1.yaml` is a complete two-week trial you can hand
+to `hermes cron add` — setup, session polling, daily recap, weekly report, and a review
+at the end that is allowed to conclude the sample is too small to say anything.
 
 ### Running the scripts directly
 
@@ -151,7 +154,9 @@ python $S/trailing-buy/scripts/trailing_buy.py report --plan 1 --out ~/agnc-trai
 ## Scheduled briefs
 
 `cron/schedules.example.yaml` has ready-made jobs: a pre-open brief, a
-post-close recap, a Friday performance review, and a Monday volatility check.
+post-close recap, a Friday performance review, a Monday volatility check, and a
+trailing-buy poll and recap. `cron/agnc-phase1.yaml` is a complete two-week
+read-only trailing-buy trial, numbers explained.
 Hermes' cron scheduler takes natural-language prompts and delivers to whichever
 platform you have wired up.
 
@@ -184,7 +189,7 @@ pip install pytest
 ./run_tests.sh
 ```
 
-339 tests, standard library and `unittest.mock` only, no live network calls.
+351 tests, standard library and `unittest.mock` only, no live network calls.
 The option pricing is checked against put-call parity and known payoff
 structures — a 100/110 call debit spread paid for $3.00 must show a $300 max
 loss, a $700 max profit and a breakeven at 103.

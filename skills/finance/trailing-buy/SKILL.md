@@ -127,6 +127,12 @@ digest wakes it with a diff. So the state and the entry count are all it prints 
 a price or a timestamp in there would wake the model every five minutes, which is
 the cost this mode exists to avoid.
 
+When creating the cron job yourself, `--monitor-script` takes **just the filename**
+(`trailing_buy_monitor.py`), not a path. Hermes refuses an absolute or `~`-prefixed
+value and confines the script to `$HERMES_HOME/scripts/` — a cron script path is
+reachable by prompt injection, so that refusal is a feature, not an obstacle to
+route around.
+
 Two consequences worth knowing. A failed poll is invisible here on purpose, because
 flapping output would wake the agent on every network blip; the tick records the
 failure in the ledger either way, and the unconditional daily recap is what notices

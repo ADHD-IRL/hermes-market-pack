@@ -66,7 +66,8 @@ if ($env:HERMES_HOME -and $env:HERMES_HOME.Trim()) {
 $Script = Join-Path $HermesHome 'skills\finance\trailing-buy\scripts\trailing_buy.py'
 $MonitorSrc = Join-Path $SourceDir 'skills\finance\trailing-buy\scripts\monitor.py'
 $ScriptsDir = Join-Path $HermesHome 'scripts'
-$MonitorDest = Join-Path $ScriptsDir 'trailing_buy_monitor.py'
+$MonitorName = 'trailing_buy_monitor.py'
+$MonitorDest = Join-Path $ScriptsDir $MonitorName
 $ReportPath = Join-Path $HermesHome "$Slug-phase1.html"
 
 function Invoke-Step {
@@ -149,6 +150,23 @@ Write-Host "monitor   -> $MonitorDest"
 # ---------------------------------------------------------------------------
 # 2. The plan
 # ---------------------------------------------------------------------------
+# Re-runnable: a partly-failed run leaves the plan behind, and creating a second
+# one for the same symbol makes every later command ambiguous.
+$Existing = $null
+if (-not $DryRun) {
+    try {
+        $Listed = & $Python @($PythonArgs + @($Script, 'plan', 'list')) | ConvertFrom-Json
+        $Existing = $Listed.plans | Where-Object { $_.symbol -eq $Symbol } | Select-Object -First 1
+    } catch {
+        $Existing = $null
+    }
+}
+
+if ($Existing) {
+    Write-Host "plan      -> reusing existing plan $($Existing.id) for $Symbol (state $($Existing.state))"
+    Write-Host "             cancel it first if you wanted different numbers:"
+    Write-Host "             $Python $Script plan cancel --plan $($Existing.id)"
+} else {
 Invoke-Step $Python ($PythonArgs + @(
     $Script, 'plan', 'create',
     '--symbol', $Symbol,
@@ -163,6 +181,7 @@ Invoke-Step $Python ($PythonArgs + @(
     '--paper',
     '--notes', 'phase 1 read-only trial, 2 weeks'
 ))
+}
 
 # ---------------------------------------------------------------------------
 # 3. The jobs
@@ -211,7 +230,10 @@ Invoke-Step 'hermes' @(
     '--name', "$Slug-trail-poll",
     '--deliver', $Deliver,
     '--skill', 'trailing-buy',
-    '--monitor-script', $MonitorDest
+    # A bare filename, not $MonitorDest. Hermes rejects absolute paths here on
+    # purpose - a cron script path is reachable by prompt injection, so it is
+    # confined to $HERMES_HOME\scripts by name.
+    '--monitor-script', $MonitorName
 )
 
 $RecapPrompt = @"
@@ -255,6 +277,9 @@ Write-Host "  $Python $Script plan show     # state ARMED, paper 1"
 Write-Host "  $Python $MonitorDest          # one stable line per plan"
 Write-Host ""
 Write-Host "The gateway has to be running for cron to fire:  hermes gateway status"
+Write-Host ""
+Write-Host "Re-running this adds the jobs again - the plan is reused, the jobs are not"
+Write-Host "de-duplicated. Check 'hermes cron list' and remove any doubles."
 Write-Host ""
 Write-Host "Stop everything at any time:"
 Write-Host "  $Python $Script halt --reason 'stepping away'"

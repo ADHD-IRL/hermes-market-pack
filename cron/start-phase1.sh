@@ -41,7 +41,8 @@ fi
 
 SCRIPT="$HOME_DIR/skills/finance/trailing-buy/scripts/trailing_buy.py"
 MONITOR_SRC="$SOURCE_DIR/skills/finance/trailing-buy/scripts/monitor.py"
-MONITOR_DEST="$HOME_DIR/scripts/trailing_buy_monitor.py"
+MONITOR_NAME="trailing_buy_monitor.py"
+MONITOR_DEST="$HOME_DIR/scripts/$MONITOR_NAME"
 
 run() {
   if [ "$DRY_RUN" = "1" ]; then
@@ -97,6 +98,28 @@ echo "monitor   -> $MONITOR_DEST"
 # ---------------------------------------------------------------------------
 # 2. The plan
 # ---------------------------------------------------------------------------
+# Re-runnable: a partly-failed run leaves the plan behind, and creating a second
+# one for the same symbol makes every later command ambiguous.
+EXISTING=""
+if [ "$DRY_RUN" != "1" ]; then
+  EXISTING=$("$PY" "$SCRIPT" plan list 2>/dev/null | "$PY" -c "
+import json, sys
+try:
+    plans = json.load(sys.stdin).get('plans') or []
+except Exception:
+    sys.exit(0)
+for p in plans:
+    if p['symbol'] == '$SYMBOL':
+        print(p['id'])
+        break
+" || true)
+fi
+
+if [ -n "$EXISTING" ]; then
+  echo "plan      -> reusing existing plan $EXISTING for $SYMBOL"
+  echo "             cancel it first if you wanted different numbers:"
+  echo "             $PY $SCRIPT plan cancel --plan $EXISTING"
+else
 run "$PY" "$SCRIPT" plan create \
   --symbol "$SYMBOL" \
   --arm "$ARM" \
@@ -109,6 +132,7 @@ run "$PY" "$SCRIPT" plan create \
   --cooldown-seconds 900 \
   --paper \
   --notes "phase 1 read-only trial, 2 weeks"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. The jobs
@@ -147,7 +171,9 @@ different numbers." \
   --name "${SLUG}-trail-poll" \
   --deliver "$DELIVER" \
   --skill trailing-buy \
-  --monitor-script "$MONITOR_DEST"
+  --monitor-script "$MONITOR_NAME"  # a bare filename: Hermes rejects absolute
+                                    # paths here, because a cron script path is
+                                    # reachable by prompt injection
 
 run hermes cron add "15 16 * * 1-5" \
   "Summarise today's $SYMBOL trailing-buy activity from '$SCRIPT plan show --ticks 100'.
@@ -179,6 +205,9 @@ echo "  $PY $SCRIPT plan show          # state ARMED, paper 1"
 echo "  $PY $MONITOR_DEST              # one stable line per plan"
 echo
 echo "The gateway has to be running for cron to fire:  hermes gateway status"
+echo
+echo "Re-running this adds the jobs again - the plan is reused, the jobs are not"
+echo "de-duplicated. Check 'hermes cron list' and remove any doubles."
 echo
 echo "Stop everything at any time:"
 echo "  $PY $SCRIPT halt --reason 'stepping away'"
